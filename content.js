@@ -56,14 +56,21 @@ function parseChatGPT(turndown) {
   return md;
 }
 
-function parseClaude(turndown) {
+// 2. Claude 파싱 (최신 구조 반영)
+function parseClaude() {
   let md = "# Claude 대화 내역\n\n";
-  const messages = document.querySelectorAll('.font-user-message, .font-claude-message'); 
+  
+  // 최신 Claude 구조 (사용자: data-testid="user-message", 클로드: .font-claude-message 또는 .font-claude-response)
+  const messages = document.querySelectorAll('[data-testid="user-message"], .font-claude-message, .font-claude-response'); 
+  
   messages.forEach(msg => {
-    const isUser = msg.classList.contains('font-user-message');
+    // 사용자가 쓴 글인지 판별
+    const isUser = msg.getAttribute('data-testid') === 'user-message';
     const author = isUser ? '👤 **User**' : '🧠 **Claude**';
-    md += `${author}\n\n${turndown.turndown(msg.innerHTML)}\n\n---\n\n`;
+    
+    md += `${author}\n\n${msg.innerText}\n\n---\n\n`;
   });
+  
   return md;
 }
 
