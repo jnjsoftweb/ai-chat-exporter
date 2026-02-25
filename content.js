@@ -9,78 +9,147 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const title = document.title.replace(/[^a-z0-9가-힣]/gi, '_');
       sendResponse({ markdown: markdown, title: title });
     } catch (error) {
-      // 에러가 발생하면 원인을 popup으로 전송
       sendResponse({ error: error.message });
     }
   }
-  return true; // 비동기 응답을 위해 true 반환
+  return true; 
 });
 
 function extractChat() {
   const url = window.location.hostname;
   let markdown = "";
-  
-  // TurndownService가 없는 경우 에러를 발생시킴
-  if (typeof TurndownService === "undefined") {
-    throw new Error("turndown.js 라이브러리가 로드되지 않았습니다. 폴더에 파일이 있는지 확인하세요.");
-  }
-  
-  const turndownService = new TurndownService();
 
   if (url.includes("chatgpt.com")) {
-    markdown = parseChatGPT(turndownService);
+    markdown = parseChatGPT();
   } else if (url.includes("claude.ai")) {
-    markdown = parseClaude(turndownService);
+    markdown = parseClaude();
   } else if (url.includes("gemini.google.com")) {
-    markdown = parseGemini(turndownService);
+    markdown = parseGemini();
+  } else if (url.includes("aistudio.google.com")) {
+    markdown = parseAIStudio();
+  } else if (url.includes("genspark.ai")) {
+    markdown = parseGenspark(); // Genspark 추가!
   } else {
-    return null; // 지원하지 않는 URL
+    return null; 
   }
 
-  // 추출된 메시지가 없는 경우
   if (markdown.split('\n').length < 5) {
-    throw new Error("대화 내용을 찾을 수 없습니다. (사이트의 HTML 구조가 변경되었을 수 있습니다.)");
+    throw new Error("대화 내용을 찾을 수 없습니다. (채팅창이 열려있는지 확인하세요!)");
   }
 
   return markdown;
 }
 
-function parseChatGPT(turndown) {
+// 1. ChatGPT 파싱
+function parseChatGPT() {
   let md = "# ChatGPT 대화 내역\n\n";
   const messages = document.querySelectorAll('[data-message-author-role]');
   messages.forEach(msg => {
     const role = msg.getAttribute('data-message-author-role');
     const author = role === 'user' ? '👤 **User**' : '🤖 **ChatGPT**';
-    md += `${author}\n\n${turndown.turndown(msg.innerHTML)}\n\n---\n\n`;
-  });
-  return md;
-}
-
-// 2. Claude 파싱 (최신 구조 반영)
-function parseClaude() {
-  let md = "# Claude 대화 내역\n\n";
-  
-  // 최신 Claude 구조 (사용자: data-testid="user-message", 클로드: .font-claude-message 또는 .font-claude-response)
-  const messages = document.querySelectorAll('[data-testid="user-message"], .font-claude-message, .font-claude-response'); 
-  
-  messages.forEach(msg => {
-    // 사용자가 쓴 글인지 판별
-    const isUser = msg.getAttribute('data-testid') === 'user-message';
-    const author = isUser ? '👤 **User**' : '🧠 **Claude**';
-    
     md += `${author}\n\n${msg.innerText}\n\n---\n\n`;
   });
-  
   return md;
 }
 
-function parseGemini(turndown) {
+// 2. Claude 파싱 
+function parseClaude() {
+  let md = "# Claude 대화 내역\n\n";
+  const messages = document.querySelectorAll('[data-testid="user-message"], .font-claude-message, .font-claude-response'); 
+  messages.forEach(msg => {
+    const isUser = msg.getAttribute('data-testid') === 'user-message';
+    const author = isUser ? '👤 **User**' : '🧠 **Claude**';
+    md += `${author}\n\n${msg.innerText}\n\n---\n\n`;
+  });
+  return md;
+}
+
+// 3. Gemini 파싱
+function parseGemini() {
   let md = "# Gemini 대화 내역\n\n";
   const messages = document.querySelectorAll('user-query, model-response');
   messages.forEach(msg => {
     const isUser = msg.tagName.toLowerCase() === 'user-query';
     const author = isUser ? '👤 **User**' : '✨ **Gemini**';
-    md += `${author}\n\n${turndown.turndown(msg.innerHTML)}\n\n---\n\n`;
+    md += `${author}\n\n${msg.innerText}\n\n---\n\n`;
   });
+  return md;
+}
+
+// 4. Google AI Studio 파싱 
+function parseAIStudio() {
+  let md = "# Google AI Studio 대화 내역\n\n";
+  const turns = document.querySelectorAll('ms-chat-turn');
+  
+  turns.forEach((turn, index) => {
+    let isUser = index % 2 === 0; 
+    const container = turn.querySelector('.chat-turn-container, .turn');
+    if (container) {
+      if (container.classList.contains('user') || container.classList.contains('input')) isUser = true;
+      if (container.classList.contains('model') || container.classList.contains('output')) isUser = false;
+    }
+    const author = isUser ? '👤 **User**' : '⚙️ **Model**';
+    
+    const contentBox = turn.querySelector('.turn-content') || turn;
+    let text = contentBox.innerText || "";
+    
+    const ignoreWords = ['edit', 'more_vert', 'content_copy', 'report', 'chevron_right', 'expand to view model thoughts', 'thoughts'];
+    let lines = text.split('\n').filter(line => !ignoreWords.includes(line.trim().toLowerCase()));
+    
+    text = lines.join('\n').trim();
+    if (text) md += `${author}\n\n${text}\n\n---\n\n`;
+  });
+  return md;
+}
+
+// 5. Genspark 파싱 (새로 추가됨)
+function parseGenspark() {
+  let md = "# Genspark 대화 내역\n\n";
+  
+  // Genspark의 채팅 영역 요소를 타겟팅합니다.
+  const turns = document.querySelectorAll('article, [class*="message"], [class*="chat-turn"], [class*="bubble"]');
+  
+  // 제거할 쓸데없는 버튼/아이콘 텍스트들
+  const ignoreWords = [
+    'copy', 'share', 'edit', 'regenerate', 'like', 'dislike', 'report',
+    'translate', 'read aloud', 'save', 'bookmarks', 'more', 'reply'
+  ];
+
+  // 만약 위 선택자로 잡히지 않는 레이아웃이라면, 화면 전체 본문을 추출합니다 (스마트 폴백)
+  if (turns.length === 0) {
+      const main = document.querySelector('main') || document.body;
+      let lines = (main.innerText || "").split('\n');
+      lines = lines.filter(line => !ignoreWords.includes(line.trim().toLowerCase()) && line.trim() !== "");
+      
+      let text = lines.join('\n').trim();
+      if (text) md += "✨ **Genspark Search Result**\n\n" + text + "\n\n";
+      return md;
+  }
+
+  // 중복 추출 방지용 Set
+  const seenTexts = new Set();
+
+  turns.forEach((turn) => {
+    // HTML 속성을 보고 사용자인지 AI인지 유추합니다.
+    const htmlString = turn.outerHTML.toLowerCase();
+    const isUser = htmlString.includes('user') || htmlString.includes('query') || htmlString.includes('human');
+    const author = isUser ? '👤 **User**' : '✨ **Genspark**';
+    
+    // 텍스트 추출 및 쓸데없는 버튼 글씨 제거
+    let text = turn.innerText || "";
+    let lines = text.split('\n').filter(line => {
+      const lower = line.trim().toLowerCase();
+      return !ignoreWords.includes(lower) && lower.length > 0;
+    });
+    
+    text = lines.join('\n').trim();
+    
+    // 내용이 없거나, 이미 추출한 텍스트(부모-자식 요소 중복)면 건너뜁니다.
+    if (!text || seenTexts.has(text)) return;
+    seenTexts.add(text);
+    
+    md += `${author}\n\n${text}\n\n---\n\n`;
+  });
+  
   return md;
 }
