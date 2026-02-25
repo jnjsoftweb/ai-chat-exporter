@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "AI Chat to Markdown Exporter",
+  "version": "1.0",
+  "description": "ChatGPT, Claude, Gemini의 대화를 Markdown으로 다운로드합니다.",
+  "permissions": ["activeTab", "scripting", "downloads"],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://claude.ai/*",
+    "https://gemini.google.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://chatgpt.com/*", "https://claude.ai/*", "https://gemini.google.com/*"],
+      "js": ["turndown.js", "content.js"]
+    }
+  ]
+}
