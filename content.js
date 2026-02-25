@@ -40,7 +40,7 @@ async function loadConfigAndExtract() {
     throw new Error("대화 내용을 찾을 수 없습니다.");
   }
   const title = document.title.replace(/[^a-z0-9가-힣]/gi, '_');
-  return { markdown, title };
+  return { markdown, title, model: config.name };
 }
 
 // Google AI Studio 가상 스크롤: 각 턴으로 스크롤하여 DOM 렌더링 유도
@@ -217,6 +217,20 @@ function convertToMarkdown(element, ignoreSelector) {
       }
     }
 
+    // 4. Gemini: code-block 커스텀 요소의 헤더 span에서 언어 추출
+    if (!lang) {
+      const codeBlockEl = pre.closest('code-block') || pre.closest('.code-block');
+      if (codeBlockEl) {
+        const decoration = codeBlockEl.querySelector('.code-block-decoration > span');
+        if (decoration) {
+          const langText = decoration.textContent.trim();
+          if (langText && /^[a-zA-Z0-9_+#. -]+$/i.test(langText)) {
+            lang = langText.toLowerCase();
+          }
+        }
+      }
+    }
+
     // 마법의 로직: 코드 블록 전체를 감싸는 부모(Wrapper) 찾아서 통째로 교체하기
     let wrapper = pre;
     while (wrapper.parentElement && wrapper.parentElement !== clone) {
@@ -301,7 +315,8 @@ function convertTableToMarkdown(table) {
     const cellTexts = Array.from(cells).map(cell => cell.textContent.trim());
     md += `| ${cellTexts.join(' | ')} |\n`;
 
-    if (rowIndex === 0 && row.querySelector('th')) {
+    // 첫 번째 행 다음에 항상 구분선 추가 (마크다운 테이블 필수 문법)
+    if (rowIndex === 0) {
       md += `| ${cellTexts.map(() => '---').join(' | ')} |\n`;
     }
   });

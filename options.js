@@ -22,7 +22,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('resetFormatBtn').addEventListener('click', resetFormatConfig);
 
   // 미리보기 실시간 갱신
-  ['fmtAuthor', 'fmtEmail', 'fmtFrontmatter', 'fmtUserTitle', 'fmtAiTitle', 'fmtTurnSeparator', 'fmtQaSeparator'].forEach(id => {
+  ['fmtAuthor', 'fmtEmail', 'fmtSavePath', 'fmtFilename', 'fmtFrontmatter', 'fmtUserTitle', 'fmtAiTitle', 'fmtTurnSeparator', 'fmtQaSeparator'].forEach(id => {
     document.getElementById(id).addEventListener('input', updateFormatPreview);
   });
 });
@@ -53,6 +53,8 @@ async function loadFormatConfig() {
 function showFormatForm() {
   document.getElementById('fmtAuthor').value = formatConfig.author || '';
   document.getElementById('fmtEmail').value = formatConfig.email || '';
+  document.getElementById('fmtSavePath').value = formatConfig.savePath || '';
+  document.getElementById('fmtFilename').value = formatConfig.filenameFormat || '{model}_{title}_{date}';
   document.getElementById('fmtFrontmatter').value = formatConfig.frontmatter || '';
   document.getElementById('fmtUserTitle').value = formatConfig.userTitleFormat || '';
   document.getElementById('fmtAiTitle').value = formatConfig.aiTitleFormat || '';
@@ -107,12 +109,27 @@ function updateFormatPreview() {
   preview += qaSep;
 
   document.getElementById('formatPreview').textContent = preview;
+
+  // 파일명 미리보기
+  const savePath = document.getElementById('fmtSavePath').value.replace(/\\/g, '/').replace(/\/+$/, '');
+  const fnFormat = document.getElementById('fmtFilename').value || '{model}_{title}_{date}';
+  let fnPreview = fnFormat
+    .replace(/\{title\}/g, 'ChatGPT___예제_대화')
+    .replace(/\{model\}/g, 'ChatGPT')
+    .replace(/\{date\}/g, now.getFullYear() + String(now.getMonth() + 1).padStart(2, '0') + String(now.getDate()).padStart(2, '0'))
+    .replace(/\{time\}/g, String(now.getHours()).padStart(2, '0') + String(now.getMinutes()).padStart(2, '0') + String(now.getSeconds()).padStart(2, '0'))
+    .replace(/\{datetime\}/g, now.getFullYear() + String(now.getMonth() + 1).padStart(2, '0') + String(now.getDate()).padStart(2, '0') + '_' + String(now.getHours()).padStart(2, '0') + String(now.getMinutes()).padStart(2, '0') + String(now.getSeconds()).padStart(2, '0'));
+  fnPreview = fnPreview.replace(/[<>:"|?*]/g, '_');
+  const fullPath = savePath ? `[다운로드]/${savePath}/${fnPreview}.md` : `[다운로드]/${fnPreview}.md`;
+  document.getElementById('filenamePreview').textContent = fullPath;
 }
 
 async function saveFormatConfig() {
   formatConfig = {
     author: document.getElementById('fmtAuthor').value.trim(),
     email: document.getElementById('fmtEmail').value.trim(),
+    savePath: document.getElementById('fmtSavePath').value.trim(),
+    filenameFormat: document.getElementById('fmtFilename').value.trim(),
     frontmatter: document.getElementById('fmtFrontmatter').value,
     userTitleFormat: document.getElementById('fmtUserTitle').value.trim(),
     aiTitleFormat: document.getElementById('fmtAiTitle').value.trim(),

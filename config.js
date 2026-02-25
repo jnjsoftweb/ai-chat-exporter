@@ -1,6 +1,8 @@
 const DEFAULT_FORMAT_CONFIG = {
   author: "",
   email: "",
+  savePath: "",
+  filenameFormat: "{model}_{title}_{date}",
   frontmatter: "---\ntitle: {title}\nmodel: {model}\nauthor: {author}\nemail: {email}\nurl: {url}\ncreatedAt: {createdAt}\nmessageCount: {messageCount}\ntags: []\n---",
   userTitleFormat: "### 👤 사용자 (User)",
   aiTitleFormat: "### {emoji} {authorLabel}",

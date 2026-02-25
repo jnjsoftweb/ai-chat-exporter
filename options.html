@@ -92,6 +92,24 @@
         </div>
       </div>
 
+      <div class="form-row">
+        <div class="form-group">
+          <label>저장 경로 (하위 폴더)</label>
+          <input type="text" id="fmtSavePath" placeholder="예: AI-Chats/exports">
+          <div class="hint">다운로드 폴더 기준 하위 경로. 비워두면 기본 다운로드 폴더에 저장됩니다.</div>
+        </div>
+        <div class="form-group">
+          <label>파일명 형식</label>
+          <input type="text" id="fmtFilename" value="{model}_{title}_{date}">
+          <div class="hint">변수: {title}, {model}, {date} (20260225), {time} (143022), {datetime} (20260225_143022). 확장자 .md는 자동 추가됩니다.</div>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>파일명 미리보기</label>
+        <div class="preview-box" id="filenamePreview" style="max-height: 40px;"></div>
+      </div>
+
       <div class="form-group">
         <label>Frontmatter</label>
         <textarea id="fmtFrontmatter" rows="8" style="height:auto;">---
