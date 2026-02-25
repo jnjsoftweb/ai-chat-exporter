@@ -1,29 +1,184 @@
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "extract_chat") {
-    try {
-      const markdown = extractChat();
-      if (!markdown) {
-        sendResponse({ error: "현재 URL은 지원하지 않는 사이트입니다." });
-        return;
-      }
-      const title = document.title.replace(/[^a-z0-9가-힣]/gi, '_');
-      sendResponse({ markdown: markdown, title: title });
-    } catch (error) {
+    loadConfigAndExtract().then(result => {
+      sendResponse(result);
+    }).catch(error => {
       sendResponse({ error: error.message });
-    }
+    });
   }
-  return true; 
+  return true;
 });
+
+async function loadConfigAndExtract() {
+  let configs = DEFAULT_SITE_CONFIGS;
+  let formatConfig = DEFAULT_FORMAT_CONFIG;
+  try {
+    const stored = await chrome.storage.local.get(['siteConfigs', 'formatConfig']);
+    if (stored.siteConfigs && stored.siteConfigs.length > 0) {
+      configs = stored.siteConfigs;
+    }
+    if (stored.formatConfig) {
+      formatConfig = { ...DEFAULT_FORMAT_CONFIG, ...stored.formatConfig };
+    }
+  } catch (e) {
+    // storage 접근 실패 시 기본 설정 사용
+  }
+
+  const hostname = window.location.hostname;
+  const config = configs.find(c => hostname.includes(c.hostname));
+  if (!config) {
+    return { error: "현재 URL은 지원하지 않는 사이트입니다." };
+  }
+
+  // Google AI Studio 가상 스크롤 대응: 모든 턴을 스크롤하여 콘텐츠 렌더링
+  if (hostname.includes('aistudio.google.com')) {
+    await scrollAllTurns(config.messageSelector);
+  }
+
+  const markdown = parseWithConfig(config, formatConfig);
+  if (markdown.split('\n').length < 5) {
+    throw new Error("대화 내용을 찾을 수 없습니다.");
+  }
+  const title = document.title.replace(/[^a-z0-9가-힣]/gi, '_');
+  return { markdown, title };
+}
+
+// Google AI Studio 가상 스크롤: 각 턴으로 스크롤하여 DOM 렌더링 유도
+async function scrollAllTurns(messageSelector) {
+  const turns = document.querySelectorAll(messageSelector);
+  for (const turn of turns) {
+    turn.scrollIntoView({ behavior: 'instant', block: 'center' });
+    await new Promise(r => setTimeout(r, 300));
+  }
+  // 마지막에 맨 위로 돌아가기
+  turns[0]?.scrollIntoView({ behavior: 'instant', block: 'start' });
+  await new Promise(r => setTimeout(r, 300));
+}
+
+// ==========================================
+// 범용 파서: config 기반으로 대화 추출
+// ==========================================
+function parseWithConfig(config, fmt) {
+  const messages = document.querySelectorAll(config.messageSelector);
+
+  // Frontmatter 생성
+  let md = "";
+  if (fmt.frontmatter) {
+    const now = new Date();
+    const createdAt = now.getFullYear() + '-'
+      + String(now.getMonth() + 1).padStart(2, '0') + '-'
+      + String(now.getDate()).padStart(2, '0') + ' '
+      + String(now.getHours()).padStart(2, '0') + ':'
+      + String(now.getMinutes()).padStart(2, '0');
+    md += fmt.frontmatter
+      .replace(/\{title\}/g, document.title)
+      .replace(/\{model\}/g, config.name)
+      .replace(/\{author\}/g, fmt.author || '')
+      .replace(/\{email\}/g, fmt.email || '')
+      .replace(/\{url\}/g, window.location.href)
+      .replace(/\{createdAt\}/g, createdAt)
+      .replace(/\{messageCount\}/g, String(messages.length));
+    md += "\n\n";
+  }
+
+  md += `# ${config.titlePrefix}\n\n${fmt.qaSeparator}\n\n`;
+  const seenTexts = config.deduplicate ? new Set() : null;
+
+  // AI 타이틀 템플릿에서 플레이스홀더 치환
+  const aiTitle = fmt.aiTitleFormat
+    .replace(/\{emoji\}/g, config.emoji)
+    .replace(/\{authorLabel\}/g, config.authorLabel);
+  const userTitle = fmt.userTitleFormat;
+
+  let prevIsUser = null;
+
+  messages.forEach((msg, index) => {
+    const isUser = detectUser(msg, config.userAttribute, index);
+
+    const contentEl = config.contentSelector
+      ? (msg.querySelector(config.contentSelector) || msg)
+      : msg;
+
+    const cleanContent = convertToMarkdown(contentEl, config.ignoreSelector);
+    if (!cleanContent) return;
+
+    if (seenTexts) {
+      if (seenTexts.has(cleanContent)) return;
+      seenTexts.add(cleanContent);
+    }
+
+    // 구분자 삽입: 이전 메시지가 있을 때만
+    if (prevIsUser !== null) {
+      if (prevIsUser && !isUser) {
+        // 사용자 → AI (같은 Q&A 세트 내): turnSeparator
+        md += `${fmt.turnSeparator}\n\n`;
+      } else {
+        // AI → 사용자 (새 Q&A 세트): qaSeparator
+        md += `${fmt.qaSeparator}\n\n`;
+      }
+    }
+
+    const title = isUser ? userTitle : aiTitle;
+    md += `${title}\n\n${cleanContent}\n\n`;
+
+    prevIsUser = isUser;
+  });
+
+  // 마지막 메시지 뒤에 qaSeparator
+  if (prevIsUser !== null) {
+    md += `${fmt.qaSeparator}\n\n`;
+  }
+
+  return md;
+}
+
+// ==========================================
+// 사용자 메시지 판별
+// ==========================================
+function detectUser(msg, userAttr, index) {
+  if (!userAttr) return index % 2 === 0;
+
+  // 속성 기반: { attr: "data-message-author-role", value: "user" }
+  if (userAttr.attr) {
+    return msg.getAttribute(userAttr.attr) === userAttr.value;
+  }
+
+  // 태그명 기반: { tag: "user-query" }
+  if (userAttr.tag) {
+    return msg.tagName.toLowerCase() === userAttr.tag.toLowerCase();
+  }
+
+  // 컨테이너 클래스 기반 (AI Studio): { containerSelector, userClass, aiClass }
+  if (userAttr.containerSelector) {
+    let isUser = index % 2 === 0;
+    const container = msg.querySelector(userAttr.containerSelector);
+    if (container) {
+      if (userAttr.userClass && userAttr.userClass.some(c => container.classList.contains(c))) isUser = true;
+      if (userAttr.aiClass && userAttr.aiClass.some(c => container.classList.contains(c))) isUser = false;
+    }
+    return isUser;
+  }
+
+  // HTML 문자열 매칭 (Genspark): { htmlMatch: ["user", "query", "human"] }
+  if (userAttr.htmlMatch) {
+    const html = msg.outerHTML.toLowerCase();
+    return userAttr.htmlMatch.some(keyword => html.includes(keyword));
+  }
+
+  return index % 2 === 0;
+}
 
 // ==========================================
 // [공용 함수 1] 완벽한 마크다운 파서 탑재
 // ==========================================
-function convertToMarkdown(element) {
+function convertToMarkdown(element, ignoreSelector) {
   if (!element) return "";
   const clone = element.cloneNode(true);
-  
+
   // 1. 불필요한 UI 요소 우선 제거
-  const garbages = clone.querySelectorAll('button, svg, img, [aria-hidden="true"], .sr-only');
+  const defaultIgnore = "button, svg, img, [aria-hidden='true'], .sr-only";
+  const selector = ignoreSelector || defaultIgnore;
+  const garbages = clone.querySelectorAll(selector);
   garbages.forEach(el => el.remove());
 
   // 2. [가장 중요] 코드 블록과 UI 헤더(예: bash)를 묶어서 처리
@@ -62,13 +217,11 @@ function convertToMarkdown(element) {
       }
     }
 
-    // ✨ 마법의 로직: 코드 블록 전체를 감싸는 부모(Wrapper) 찾아서 통째로 교체하기
-    // (이 로직이 코드 블록 위에 떠다니는 'bash' 같은 텍스트를 함께 먹어서 없애줍니다)
+    // 마법의 로직: 코드 블록 전체를 감싸는 부모(Wrapper) 찾아서 통째로 교체하기
     let wrapper = pre;
     while (wrapper.parentElement && wrapper.parentElement !== clone) {
       let parentText = wrapper.parentElement.textContent.trim();
       let preText = pre.textContent.trim();
-      // 부모의 텍스트 길이가 코드 텍스트 길이와 비슷하다면(UI 텍스트 몇 자만 추가된 상태라면) 부모로 인정
       if (parentText.length <= preText.length + 50) {
         wrapper = wrapper.parentElement;
       } else {
@@ -78,7 +231,6 @@ function convertToMarkdown(element) {
 
     const mdCode = `\n\n\`\`\`${lang}\n${codeText.replace(/\n$/, '')}\n\`\`\`\n\n`;
 
-    // 처리된 코드 블록을 임시 div로 교체
     let tempDiv = document.createElement('div');
     tempDiv.className = 'processed-code-block';
     tempDiv.textContent = mdCode;
@@ -90,36 +242,32 @@ function convertToMarkdown(element) {
 
   // 4. 여백(연속된 줄바꿈) 깔끔하게 정리
   markdownText = markdownText.replace(/\n{3,}/g, '\n\n').trim();
-  
+
   return markdownText;
 }
 
-// ✨ HTML 태그를 마크다운으로 번역해주는 핵심 파서 엔진
+// HTML 태그를 마크다운으로 번역해주는 핵심 파서 엔진
 function parseDOMToMarkdown(node) {
   if (node.nodeType === Node.TEXT_NODE) {
-    return node.textContent; // 일반 텍스트 반환
+    return node.textContent;
   }
   if (node.nodeType !== Node.ELEMENT_NODE) return "";
 
-  // 앞서 변환한 코드 블록은 그대로 반환
   if (node.className === 'processed-code-block') {
     return node.textContent;
   }
 
   let tagName = node.tagName.toLowerCase();
 
-  // 테이블은 별도 함수로 처리 (재귀 파서로는 셀 구분이 어려움)
   if (tagName === 'table') {
     return convertTableToMarkdown(node);
   }
 
-  // 자식 노드들 먼저 번역 (Bottom-up 방식)
   let childrenMD = "";
   for (let child of node.childNodes) {
     childrenMD += parseDOMToMarkdown(child);
   }
 
-  // HTML 태그별 마크다운 기호 매칭
   switch (tagName) {
     case 'h1': return `\n# ${childrenMD.trim()}\n\n`;
     case 'h2': return `\n## ${childrenMD.trim()}\n\n`;
@@ -139,11 +287,11 @@ function parseDOMToMarkdown(node) {
     case 'a': return `[${childrenMD}](${node.getAttribute('href')})`;
     case 'br': return `\n`;
     default:
-      return childrenMD; // div, span 등은 구조만 유지
+      return childrenMD;
   }
 }
 
-// ✨ HTML 테이블을 마크다운 테이블로 변환
+// HTML 테이블을 마크다운 테이블로 변환
 function convertTableToMarkdown(table) {
   let md = "\n\n";
   const rows = table.querySelectorAll('tr');
@@ -153,7 +301,6 @@ function convertTableToMarkdown(table) {
     const cellTexts = Array.from(cells).map(cell => cell.textContent.trim());
     md += `| ${cellTexts.join(' | ')} |\n`;
 
-    // 헤더 행 다음에 구분선 추가
     if (rowIndex === 0 && row.querySelector('th')) {
       md += `| ${cellTexts.map(() => '---').join(' | ')} |\n`;
     }
@@ -162,103 +309,3 @@ function convertTableToMarkdown(table) {
   return md + "\n";
 }
 
-// ==========================================
-// [공용 함수 2] '사용자-AI' 구분선 포맷팅
-// ==========================================
-function formatTurn(author, content) {
-  return `### ${author}\n\n${content}\n\n---\n\n`;
-}
-
-// ==========================================
-// 메인 실행 함수 및 개별 사이트 로직
-// ==========================================
-function extractChat() {
-  const url = window.location.hostname;
-  let markdown = "";
-
-  if (url.includes("claude.ai")) markdown = parseClaude();
-  else if (url.includes("chatgpt.com")) markdown = parseChatGPT();
-  else if (url.includes("gemini.google.com")) markdown = parseGemini();
-  else if (url.includes("aistudio.google.com")) markdown = parseAIStudio();
-  else if (url.includes("genspark.ai")) markdown = parseGenspark();
-  else return null; 
-
-  if (markdown.split('\n').length < 5) {
-    throw new Error("대화 내용을 찾을 수 없습니다.");
-  }
-  return markdown;
-}
-
-function parseClaude() {
-  let md = "# Claude 대화 내역\n\n---\n\n";
-  const messages = document.querySelectorAll('[data-testid="user-message"], .font-claude-message, .font-claude-response'); 
-  messages.forEach(msg => {
-    const isUser = msg.getAttribute('data-testid') === 'user-message';
-    const author = isUser ? '👤 사용자 (User)' : '🧠 클로드 (Claude)';
-    const cleanContent = convertToMarkdown(msg);
-    if (cleanContent) md += formatTurn(author, cleanContent);
-  });
-  return md;
-}
-
-function parseChatGPT() {
-  let md = "# ChatGPT 대화 내역\n\n---\n\n";
-  const messages = document.querySelectorAll('[data-message-author-role]');
-  messages.forEach(msg => {
-    const isUser = msg.getAttribute('data-message-author-role') === 'user';
-    const author = isUser ? '👤 사용자 (User)' : '🤖 챗GPT (ChatGPT)';
-    const cleanContent = convertToMarkdown(msg);
-    if (cleanContent) md += formatTurn(author, cleanContent);
-  });
-  return md;
-}
-
-function parseGemini() {
-  let md = "# Gemini 대화 내역\n\n---\n\n";
-  const messages = document.querySelectorAll('user-query, model-response');
-  messages.forEach(msg => {
-    const isUser = msg.tagName.toLowerCase() === 'user-query';
-    const author = isUser ? '👤 사용자 (User)' : '✨ 제미나이 (Gemini)';
-    const cleanContent = convertToMarkdown(msg);
-    if (cleanContent) md += formatTurn(author, cleanContent);
-  });
-  return md;
-}
-
-function parseAIStudio() {
-  let md = "# Google AI Studio 대화 내역\n\n---\n\n";
-  const turns = document.querySelectorAll('ms-chat-turn');
-  turns.forEach((turn, index) => {
-    let isUser = index % 2 === 0; 
-    const container = turn.querySelector('.chat-turn-container, .turn');
-    if (container) {
-      if (container.classList.contains('user') || container.classList.contains('input')) isUser = true;
-      if (container.classList.contains('model') || container.classList.contains('output')) isUser = false;
-    }
-    const author = isUser ? '👤 사용자 (User)' : '⚙️ 모델 (Model)';
-    const contentBox = turn.querySelector('.turn-content') || turn;
-    
-    const cleanContent = convertToMarkdown(contentBox);
-    if (cleanContent) md += formatTurn(author, cleanContent);
-  });
-  return md;
-}
-
-function parseGenspark() {
-  let md = "# Genspark 대화 내역\n\n---\n\n";
-  const turns = document.querySelectorAll('article, [class*="message"], [class*="chat-turn"], [class*="bubble"]');
-  const seenTexts = new Set();
-
-  turns.forEach((turn) => {
-    const htmlString = turn.outerHTML.toLowerCase();
-    const isUser = htmlString.includes('user') || htmlString.includes('query') || htmlString.includes('human');
-    const author = isUser ? '👤 사용자 (User)' : '✨ 젠스파크 (Genspark)';
-    
-    const cleanContent = convertToMarkdown(turn);
-    if (!cleanContent || seenTexts.has(cleanContent)) return;
-    seenTexts.add(cleanContent);
-    
-    md += formatTurn(author, cleanContent);
-  });
-  return md;
-}

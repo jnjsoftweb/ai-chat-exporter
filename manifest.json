@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "AI Chat to Markdown Exporter",
-  "version": "1.2",
+  "version": "1.3",
   "description": "ChatGPT, Claude, Gemini, Google AI Studio, Genspark의 대화를 다운로드합니다.",
-  "permissions": ["activeTab", "scripting", "downloads"],
+  "permissions": ["activeTab", "scripting", "downloads", "storage"],
   "host_permissions": [
     "https://chatgpt.com/*",
     "https://claude.ai/*",
@@ -14,16 +14,17 @@
   "action": {
     "default_popup": "popup.html"
   },
+  "options_page": "options.html",
   "content_scripts": [
     {
       "matches": [
-        "https://chatgpt.com/*", 
-        "https://claude.ai/*", 
+        "https://chatgpt.com/*",
+        "https://claude.ai/*",
         "https://gemini.google.com/*",
         "https://aistudio.google.com/*",
         "https://www.genspark.ai/*"
       ],
-      "js": ["content.js"] 
+      "js": ["config.js", "content.js"]
     }
   ]
 }
